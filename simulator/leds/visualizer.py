@@ -64,7 +64,6 @@ class LEDVisualizer:
                     "index": i,
                     "string": string.get("name", f"string{len(self.string_map)}")
                 })
-            # Keep track of string boundaries for labeling if needed
             self.string_map.append((string.get("name", f"string{len(self.string_map)}"),
                                     idx_start,
                                     len(string.get("leds", []))))
@@ -103,7 +102,6 @@ class LEDVisualizer:
     def draw(self):
         win_w, win_h = self.screen.get_size()
 
-        # Determine image area
         img_space_h = win_h - self.control_panel_height
 
         scale_w = win_w
@@ -119,31 +117,23 @@ class LEDVisualizer:
         scaled_bg = pygame.transform.smoothscale(self.bg_image, (scale_w, scale_h))
         self.screen.blit(scaled_bg, (img_x, img_y))
 
-        # Draw LEDs + optional index
         for led in self.leds:
             x = int(led["x_pct"] * win_w)
             y = int(led["y_pct"] * win_h)
 
-            if self.shared.is_paused:
-                color = led["default_color"]
-            else:
-                color = led["color"]
-
+            color = led["default_color"] if self.shared.is_paused else led["color"]
             pygame.draw.circle(self.screen, color, (x, y), LED_RADIUS)
 
             if self.shared.is_paused:
-                # Compute luminance for contrast
                 r, g, b = color
                 brightness = 0.299 * r + 0.587 * g + 0.114 * b
                 font_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
 
-                font = pygame.font.SysFont("Arial", 10)
-                label_surface = font.render(str(led["index"]), True, font_color)
+                label_surface = self.index_font.render(str(led["index"]), True, font_color)
                 label_rect = label_surface.get_rect(center=(x, y))
                 self.screen.blit(label_surface, label_rect)
 
-
-        # Draw control panel
+        # Control panel
         panel_w = int(win_w * 0.95)
         panel_h = self.control_panel_height - 10
         panel_x = (win_w - panel_w) // 2
@@ -156,18 +146,16 @@ class LEDVisualizer:
 
         self.button_rects.clear()
 
-        # Track name centered
+        # Track name
         track_text = self.large_font.render(self.shared.current_track_name, True, WHITE)
         self.screen.blit(track_text, (panel_x + (panel_w - track_text.get_width()) // 2, panel_y + 10))
 
         # Playback buttons
-        icons = [("prev", "⏮️"), ("pause", "⏯️"), ("next", "⏭️"), ("exit", "❌")]
+        icons = [("prev", "⏮️"), ("pause", "⏯️"), ("next", "⏭️"), ("edit", "✏️")]
         playback_surfs = [self.large_font.render(icon, True, WHITE) for (_, icon) in icons]
 
-        # Soft button surfaces
         soft_surfs = [self.font.render(lbl, True, WHITE) for lbl in self.custom_labels]
 
-        # Compute row widths
         playback_row_width = (sum(s.get_width() for s in playback_surfs)
                               + (len(playback_surfs) - 1) * 20)
         soft_row_width = (sum(s.get_width() for s in soft_surfs)
@@ -184,7 +172,7 @@ class LEDVisualizer:
             self.button_rects[key] = rect
             x += surf.get_width() + 20
 
-        # Soft buttons row
+        # Soft buttons
         soft_y = row_y + self.large_font.get_height() + 10
         if soft_surfs:
             start_soft_x = panel_x + (panel_w - soft_row_width) // 2

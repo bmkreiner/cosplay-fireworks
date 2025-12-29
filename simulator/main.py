@@ -126,6 +126,11 @@ def main():
             print(f"[INFO] Switched to previous track: {state.current_track_name}")
             if not state.is_paused:
                 start_audio(position)
+                
+        elif action == "edit":
+            print("[INFO] Edit mode button clicked.")
+            # Editing mode implementation will come next
+
 
         # Seek interaction
         if seek_drag:
