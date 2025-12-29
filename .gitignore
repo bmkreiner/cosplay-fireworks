@@ -6,3 +6,8 @@ __pycache__/
 
 # VSCode
 .vscode/
+audio_library/1. L'Amour Toujours _Tanzen.mp3
+audio_library/test.mp3
+visualizations/demo_background.png
+visualizations/demo_config.json
+example_audio/test.wav
