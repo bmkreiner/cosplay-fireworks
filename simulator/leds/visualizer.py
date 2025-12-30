@@ -37,18 +37,11 @@ class LEDVisualizer:
         self.button_rects = {}
         self.clock = pygame.time.Clock()
 
-        self.edit_mode = False
-        self.unsaved_changes = False
         self.dragging_led = None
-
-        # Track scaled image placement
-        self.img_x = 0
-        self.img_y = 0
-        self.scale_w = self.bg_w
-        self.scale_h = self.bg_h
+        self.dirty = False
 
     def _load_config(self):
-        with open(self.config_path, "r") as f:
+        with open(self.config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
 
         bg_path = os.path.join("visualizations", cfg["background"])
@@ -78,6 +71,29 @@ class LEDVisualizer:
 
         self.custom_labels = [btn.get("label", "") for btn in cfg.get("buttons", [])]
 
+    def save_config(self):
+        # Rewrite JSON with updated led positions
+        new_strings = []
+        for name, start, count in self.string_map:
+            leds = self.leds[start:start + count]
+            led_entries = [{"x": round(led["x_pct"], 4), "y": round(led["y_pct"], 4)} for led in leds]
+            default_color = leds[0]["default_color"] if leds else [0, 0, 0]
+            new_strings.append({
+                "name": name,
+                "default_color": list(default_color),
+                "leds": led_entries
+            })
+
+        data = {
+            "background": os.path.basename(self.config_path).replace(".json", ".png"),
+            "strings": new_strings,
+            "buttons": [{"label": lbl} for lbl in self.custom_labels]
+        }
+
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        self.dirty = False
+
     def update_leds(self, colors):
         for i, c in enumerate(colors):
             if i < len(self.leds):
@@ -90,86 +106,67 @@ class LEDVisualizer:
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
-                self.shared.clicked_button = "exit"
+                clicked = "exit"
 
             elif e.type == pygame.VIDEORESIZE:
                 self._resize_window(e.w, e.h)
 
             elif e.type == pygame.MOUSEBUTTONDOWN:
-                mx, my = e.pos
+                if self.shared.edit_mode:
+                    # In edit mode: allow dragging, save, or exit only
+                    if "save" in self.button_rects and self.button_rects["save"].collidepoint(mx, my):
+                        clicked = "save"
+                    elif "edit" in self.button_rects and self.button_rects["edit"].collidepoint(mx, my):
+                        clicked = "edit"
+                    else:
+                        # Check for LED under cursor
+                        for i, led in enumerate(self.leds):
+                            x, y = self._led_screen_position(led)
+                            if pygame.Rect(x - LED_RADIUS, y - LED_RADIUS, 2 * LED_RADIUS, 2 * LED_RADIUS).collidepoint(mx, my):
+                                self.dragging_led = i
+                                break
 
-                # --- BUTTONS FIRST ---
-                for name, rect in self.button_rects.items():
-                    if rect.collidepoint(mx, my):
-                        clicked = name
-                        return clicked, seek_drag  # prevent LED drag on button click
-
-                # --- SLIDER ---
-                if self.slider_rect and self.slider_rect.collidepoint(mx, my):
-                    seek_drag = True
-                    return clicked, seek_drag  # prevent LED drag on slider click
-
-                # --- LED DRAG START ---
-                if self.edit_mode:
-                    img_x, img_y, img_w, img_h = self.image_rect
-                    for led in self.leds:
-                        led_x = int(led["x_pct"] * img_w) + img_x
-                        led_y = int(led["y_pct"] * img_h) + img_y
-                        if (mx - led_x) ** 2 + (my - led_y) ** 2 <= LED_RADIUS ** 2:
-                            self.dragging_led = led
-                            break
+                else:
+                    # Normal mode: allow all buttons
+                    for name, rect in self.button_rects.items():
+                        if rect.collidepoint(mx, my):
+                            clicked = name
+                    if self.slider_rect and self.slider_rect.collidepoint(mx, my):
+                        seek_drag = True
 
             elif e.type == pygame.MOUSEBUTTONUP:
-                if self.edit_mode:
-                    self.dragging_led = None
+                self.dragging_led = None
 
             elif e.type == pygame.MOUSEMOTION:
-                if self.edit_mode and self.dragging_led:
+                if self.shared.edit_mode and self.dragging_led is not None:
                     img_x, img_y, img_w, img_h = self.image_rect
                     rel_x = (mx - img_x) / img_w
                     rel_y = (my - img_y) / img_h
-                    rel_x = max(0.0, min(1.0, rel_x))
-                    rel_y = max(0.0, min(1.0, rel_y))
-                    self.dragging_led["x_pct"] = rel_x
-                    self.dragging_led["y_pct"] = rel_y
-                    self.unsaved_changes = True
+                    rel_x = min(max(0.0, rel_x), 1.0)
+                    rel_y = min(max(0.0, rel_y), 1.0)
+                    led = self.leds[self.dragging_led]
+                    led["x_pct"] = rel_x
+                    led["y_pct"] = rel_y
+                    self.dirty = True
 
         return clicked, seek_drag
 
- 
+   
     def _resize_window(self, w, h):
         new_w = max(w, self.min_width)
         new_h = max(h, self.min_height)
         self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
 
-    def _save_config(self):
-        try:
-            with open(self.config_path, "r") as f:
-                cfg = json.load(f)
-
-            i = 0
-            for s in cfg["strings"]:
-                count = len(s["leds"])
-                for j in range(count):
-                    led = self.leds[i]
-                    s["leds"][j]["x"] = round(led["x_pct"], 4)
-                    s["leds"][j]["y"] = round(led["y_pct"], 4)
-                    i += 1
-
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2)
-
-            self.unsaved_changes = False
-            print("[INFO] Saved updated LED positions.")
-
-        except Exception as e:
-            print(f"[SAVE ERROR] {e}")
+    def _led_screen_position(self, led):
+        img_x, img_y, img_w, img_h = self.image_rect
+        led_x = img_x + int(led["x_pct"] * img_w)
+        led_y = img_y + int(led["y_pct"] * img_h)
+        return led_x, led_y
 
     def draw(self):
         win_w, win_h = self.screen.get_size()
         img_space_h = win_h - self.control_panel_height
 
-        # Scale image to fit width, or height if needed
         scale_w = win_w
         scale_h = int(scale_w * (self.bg_h / self.bg_w))
         if scale_h > img_space_h:
@@ -178,32 +175,24 @@ class LEDVisualizer:
 
         img_x = (win_w - scale_w) // 2
         img_y = 0
-
-        # Save image rect for LED positioning + edit mode
         self.image_rect = (img_x, img_y, scale_w, scale_h)
 
-        # Draw background image
         scaled_bg = pygame.transform.smoothscale(self.bg_image, (scale_w, scale_h))
         self.screen.blit(scaled_bg, (img_x, img_y))
 
-        # Draw LEDs
         for led in self.leds:
-            led_x = int(led["x_pct"] * scale_w) + img_x
-            led_y = int(led["y_pct"] * scale_h) + img_y
-
+            x, y = self._led_screen_position(led)
             color = led["default_color"] if self.shared.is_paused else led["color"]
-            pygame.draw.circle(self.screen, color, (led_x, led_y), LED_RADIUS)
+            pygame.draw.circle(self.screen, color, (x, y), LED_RADIUS)
 
             if self.shared.is_paused:
-                # Calculate font color for contrast
                 r, g, b = color
                 brightness = 0.299 * r + 0.587 * g + 0.114 * b
                 font_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
                 label_surface = self.index_font.render(str(led["index"]), True, font_color)
-                label_rect = label_surface.get_rect(center=(led_x, led_y))
-                self.screen.blit(label_surface, label_rect)
+                self.screen.blit(label_surface, label_surface.get_rect(center=(x, y)))
 
-        # --- Draw control panel ---
+        # CONTROL PANEL
         panel_w = int(win_w * 0.95)
         panel_h = self.control_panel_height - 10
         panel_x = (win_w - panel_w) // 2
@@ -220,46 +209,43 @@ class LEDVisualizer:
         track_text = self.large_font.render(self.shared.current_track_name, True, WHITE)
         self.screen.blit(track_text, (panel_x + (panel_w - track_text.get_width()) // 2, panel_y + 10))
 
-        # Playback buttons
-        icons = [("prev", "⏮️"), ("pause", "⏯️"), ("next", "⏭️")]
-        if self.unsaved_changes:
-            icons.append(("save", "💾"))
+        # Buttons
+        buttons = [("prev", "⏮️"), ("pause", "⏯️"), ("next", "⏭️")]
+        if self.shared.edit_mode:
+            if self.dirty:
+                buttons.append(("save", "💾"))
+            buttons.append(("edit", "❌"))  # acts like cancel/exit edit
         else:
-            icons.append(("edit", "✏️"))
+            buttons.append(("edit", "✏️"))
 
-        playback_surfs = [self.large_font.render(icon, True, WHITE) for (_, icon) in icons]
-        soft_surfs = [self.font.render(lbl, True, WHITE) for lbl in self.custom_labels]
 
-        playback_row_width = (sum(s.get_width() for s in playback_surfs)
-                            + (len(playback_surfs) - 1) * 20)
-        soft_row_width = (sum(s.get_width() for s in soft_surfs)
-                        + (len(soft_surfs) - 1) * 20) if soft_surfs else 0
-        content_width = max(playback_row_width, soft_row_width, 200)
-
-        # Playback row
+        btn_surfs = [self.large_font.render(icon, True, WHITE) for _, icon in buttons]
+        row_w = sum(s.get_width() + 20 for s in btn_surfs) - 20
+        x = panel_x + (panel_w - row_w) // 2
         row_y = panel_y + 40
-        start_x = panel_x + (panel_w - playback_row_width) // 2
-        x = start_x
-        for (key, _), surf in zip(icons, playback_surfs):
+
+        for (name, _), surf in zip(buttons, btn_surfs):
             rect = surf.get_rect(topleft=(x, row_y))
             self.screen.blit(surf, rect)
-            self.button_rects[key] = rect
+            if not self.shared.in_effect:
+                self.button_rects[name] = rect
             x += surf.get_width() + 20
 
         # Soft buttons
-        soft_y = row_y + self.large_font.get_height() + 10
+        soft_surfs = [self.font.render(lbl, True, WHITE) for lbl in self.custom_labels]
         if soft_surfs:
-            start_soft_x = panel_x + (panel_w - soft_row_width) // 2
-            x2 = start_soft_x
+            soft_row_w = sum(s.get_width() + 20 for s in soft_surfs) - 20
+            x = panel_x + (panel_w - soft_row_w) // 2
+            y = row_y + self.large_font.get_height() + 10
             for lbl, surf in zip(self.custom_labels, soft_surfs):
-                rect = surf.get_rect(topleft=(x2, soft_y))
+                rect = surf.get_rect(topleft=(x, y))
                 self.screen.blit(surf, rect)
                 self.button_rects[lbl] = rect
-                x2 += surf.get_width() + 20
+                x += surf.get_width() + 20
 
         # Slider
-        slider_y = soft_y + self.font.get_height() + 18
-        slider_w = content_width
+        slider_y = panel_y + panel_h - 30
+        slider_w = panel_w // 2
         slider_x = panel_x + (panel_w - slider_w) // 2
         self.slider_rect = pygame.Rect(slider_x, slider_y, slider_w, 10)
         pygame.draw.rect(self.screen, GRAY, self.slider_rect)
@@ -268,15 +254,3 @@ class LEDVisualizer:
 
         pygame.display.flip()
         self.clock.tick(60)
-
-
-    def toggle_edit_mode(self):
-        self.edit_mode = not self.edit_mode
-        if self.edit_mode:
-            self.shared.is_paused = True
-        self.dragging_led = None
-
-    def save_if_needed(self):
-        if self.unsaved_changes:
-            self._save_config()
-            self.unsaved_changes = False

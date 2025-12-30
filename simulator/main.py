@@ -9,6 +9,7 @@ import simpleaudio as sa
 from simulator.audio.equalizer import Equalizer10Band
 from simulator.leds.visualizer import LEDVisualizer
 from simulator.leds.patterns import blended_eq_pattern
+from simulator.effects.oneshot import EFFECT_MAP
 
 AUDIO_DIR = "audio_library"
 CHUNK = 1024
@@ -20,8 +21,12 @@ class SharedState:
         self.user_seek_active = False
         self.clicked_button = None
         self.current_track_name = ""
-        self.is_paused = False
+        self.is_paused = True  # Start paused
         self.custom_labels = custom_labels
+        self.active_effect = None
+        self.in_effect = False
+        self.effect_start_time = 0.0
+        self.edit_mode = False
 
 
 def get_playlist():
@@ -79,8 +84,6 @@ def main():
                 playback = None
 
     state.current_track_name = playlist[index]
-    start_audio(0)
-
     visualizer = LEDVisualizer(state, cfg_path)
 
     running = True
@@ -89,57 +92,60 @@ def main():
 
         if clicked:
             if clicked == "edit":
-                visualizer.toggle_edit_mode()
-                print("[EDIT MODE] Toggled edit mode:", visualizer.edit_mode)
+                state.edit_mode = not state.edit_mode
+                state.is_paused = True
+                print(f"[INFO] Edit mode {'enabled' if state.edit_mode else 'disabled'}")
 
-            elif clicked == "save":
-                visualizer.save_if_needed()
-                visualizer.toggle_edit_mode()
-                print("[EDIT MODE] Changes saved and exited edit mode")
+            elif clicked == "save" and state.edit_mode and visualizer.dirty:
+                visualizer.save_config()
+                print("[INFO] Changes saved")
+                state.edit_mode = False
+                visualizer.dirty = False
 
-            elif not visualizer.edit_mode:
-                state.clicked_button = clicked
-
-        # Button actions (only when not in edit mode)
-        if not visualizer.edit_mode:
-            action = state.clicked_button
-            state.clicked_button = None
-
-            if action == "exit":
-                print("[INFO] Exit requested by user.")
+            elif clicked == "exit":
                 running = False
                 break
 
-            elif action == "pause":
-                state.is_paused = not state.is_paused
-                print(f"[INFO] Paused: {state.is_paused}")
-                if state.is_paused and playback:
-                    playback.stop()
-                if not state.is_paused:
-                    start_audio(position)
+            elif clicked in EFFECT_MAP and not state.edit_mode:
+                state.active_effect = clicked
+                state.in_effect = True
+                state.effect_start_time = time.time()
+                print(f"[EFFECT] Starting effect: {clicked}")
 
-            elif action == "next":
-                index = (index + 1) % len(playlist)
-                samples, sr = load_audio(playlist[index])
-                eq = Equalizer10Band(sr)
-                position = 0
-                state.current_track_name = playlist[index]
-                print(f"[INFO] Switched to next track: {state.current_track_name}")
-                if not state.is_paused:
-                    start_audio(position)
+            elif not state.in_effect and not state.edit_mode:
+                state.clicked_button = clicked
 
-            elif action == "prev":
-                index = (index - 1) % len(playlist)
-                samples, sr = load_audio(playlist[index])
-                eq = Equalizer10Band(sr)
-                position = 0
-                state.current_track_name = playlist[index]
-                print(f"[INFO] Switched to previous track: {state.current_track_name}")
-                if not state.is_paused:
-                    start_audio(position)
 
-        # Seek interaction (ignore if in edit mode)
-        if not visualizer.edit_mode and seek_drag:
+        # Playback controls
+        action = state.clicked_button
+        state.clicked_button = None
+
+        if action == "pause":
+            state.is_paused = not state.is_paused
+            if state.is_paused and playback:
+                playback.stop()
+            if not state.is_paused:
+                start_audio(position)
+
+        elif action == "next":
+            index = (index + 1) % len(playlist)
+            samples, sr = load_audio(playlist[index])
+            eq = Equalizer10Band(sr)
+            position = 0
+            state.current_track_name = playlist[index]
+            if not state.is_paused:
+                start_audio(position)
+
+        elif action == "prev":
+            index = (index - 1) % len(playlist)
+            samples, sr = load_audio(playlist[index])
+            eq = Equalizer10Band(sr)
+            position = 0
+            state.current_track_name = playlist[index]
+            if not state.is_paused:
+                start_audio(position)
+
+        if seek_drag and not state.edit_mode:
             mx = pygame.mouse.get_pos()[0]
             r = visualizer.slider_rect
             if r and r.collidepoint(mx, r.y):
@@ -149,19 +155,30 @@ def main():
                 if not state.is_paused:
                     start_audio(position)
 
-        # EQ and LED processing (pause animation in edit mode)
-        if not state.is_paused and not visualizer.edit_mode and position + CHUNK < len(samples):
+        # EFFECTS or AUDIO VISUALIZATION
+        if state.in_effect and state.active_effect:
+            elapsed = time.time() - state.effect_start_time
+            effect_fn = EFFECT_MAP.get(state.active_effect)
+            if effect_fn:
+                colors, done = effect_fn(visualizer.leds, elapsed)
+                visualizer.update_leds(colors)
+                if done:
+                    print(f"[EFFECT] Finished: {state.active_effect}")
+                    state.in_effect = False
+                    state.active_effect = None
+
+        elif not state.is_paused and position + CHUNK < len(samples):
             chunk = samples[position:position + CHUNK].astype(np.float32)
             bands = eq.process(chunk)
             colors = blended_eq_pattern(bands, len(visualizer.leds))
             position += CHUNK
+            visualizer.update_leds(colors)
+
         else:
-            colors = [(0, 0, 0)] * len(visualizer.leds)
+            visualizer.update_leds([(0, 0, 0)] * len(visualizer.leds))
 
         state.seek_position = position / len(samples)
-        visualizer.update_leds(colors)
         visualizer.draw()
-
         time.sleep(CHUNK / sr)
 
     if playback:
