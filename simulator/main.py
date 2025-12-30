@@ -87,63 +87,70 @@ def main():
     while running:
         clicked, seek_drag = visualizer.handle_events()
 
-        # Handle clicked controls
         if clicked:
-            state.clicked_button = clicked
+            if clicked == "edit":
+                visualizer.toggle_edit_mode()
+                print("[EDIT MODE] Toggled edit mode:", visualizer.edit_mode)
 
-        # Button actions
-        action = state.clicked_button
-        state.clicked_button = None
+            elif clicked == "save":
+                visualizer.save_if_needed()
+                visualizer.toggle_edit_mode()
+                print("[EDIT MODE] Changes saved and exited edit mode")
 
-        if action == "exit":
-            print("[INFO] Exit requested by user.")
-            running = False
-            break
-        elif action == "pause":
-            state.is_paused = not state.is_paused
-            print(f"[INFO] Paused: {state.is_paused}")
-            if state.is_paused and playback:
-                playback.stop()
-            if not state.is_paused:
-                start_audio(position)
+            elif not visualizer.edit_mode:
+                state.clicked_button = clicked
 
-        elif action == "next":
-            index = (index + 1) % len(playlist)
-            samples, sr = load_audio(playlist[index])
-            eq = Equalizer10Band(sr)
-            position = 0
-            state.current_track_name = playlist[index]
-            print(f"[INFO] Switched to next track: {state.current_track_name}")
-            if not state.is_paused:
-                start_audio(position)
+        # Button actions (only when not in edit mode)
+        if not visualizer.edit_mode:
+            action = state.clicked_button
+            state.clicked_button = None
 
-        elif action == "prev":
-            index = (index - 1) % len(playlist)
-            samples, sr = load_audio(playlist[index])
-            eq = Equalizer10Band(sr)
-            position = 0
-            state.current_track_name = playlist[index]
-            print(f"[INFO] Switched to previous track: {state.current_track_name}")
-            if not state.is_paused:
-                start_audio(position)
-                
-        elif action == "edit":
-            print("[INFO] Edit mode button clicked.")
-            # Editing mode implementation will come next
+            if action == "exit":
+                print("[INFO] Exit requested by user.")
+                running = False
+                break
 
+            elif action == "pause":
+                state.is_paused = not state.is_paused
+                print(f"[INFO] Paused: {state.is_paused}")
+                if state.is_paused and playback:
+                    playback.stop()
+                if not state.is_paused:
+                    start_audio(position)
 
-        # Seek interaction
-        if seek_drag:
+            elif action == "next":
+                index = (index + 1) % len(playlist)
+                samples, sr = load_audio(playlist[index])
+                eq = Equalizer10Band(sr)
+                position = 0
+                state.current_track_name = playlist[index]
+                print(f"[INFO] Switched to next track: {state.current_track_name}")
+                if not state.is_paused:
+                    start_audio(position)
+
+            elif action == "prev":
+                index = (index - 1) % len(playlist)
+                samples, sr = load_audio(playlist[index])
+                eq = Equalizer10Band(sr)
+                position = 0
+                state.current_track_name = playlist[index]
+                print(f"[INFO] Switched to previous track: {state.current_track_name}")
+                if not state.is_paused:
+                    start_audio(position)
+
+        # Seek interaction (ignore if in edit mode)
+        if not visualizer.edit_mode and seek_drag:
             mx = pygame.mouse.get_pos()[0]
             r = visualizer.slider_rect
             if r and r.collidepoint(mx, r.y):
                 state.seek_position = (mx - r.x) / r.width
                 position = int(state.seek_position * len(samples))
                 print(f"[SEEK] Jumped to {state.seek_position:.2%}")
-                start_audio(position)
+                if not state.is_paused:
+                    start_audio(position)
 
-        # EQ + LED Processing
-        if not state.is_paused and position + CHUNK < len(samples):
+        # EQ and LED processing (pause animation in edit mode)
+        if not state.is_paused and not visualizer.edit_mode and position + CHUNK < len(samples):
             chunk = samples[position:position + CHUNK].astype(np.float32)
             bands = eq.process(chunk)
             colors = blended_eq_pattern(bands, len(visualizer.leds))
